@@ -33,8 +33,9 @@ Reference implementation: `src/crypto` (pure math), `src/nostr/codec.ts` (event 
 ## 2. Poll setup (creator)
 
 ```
-pollSecret  ← 32 random bytes
 (skC, pkC)  ← fresh Nostr keypair (the creator is also a participant)
+salt        ← 32 random bytes                      (published inside the encrypted meta)
+pollSecret  = H("poll"; pkC, salt)[0..16]          (16 bytes, 128 bits)
 pollTag     = hex(H("tag"; pollSecret))[0..32]
 encKey      = HKDF-SHA256(ikm = pollSecret, salt = none (zeros), info = "unanimous/v1/enc", L = 32)
 ```
@@ -42,13 +43,25 @@ encKey      = HKDF-SHA256(ikm = pollSecret, salt = none (zeros), info = "unanimo
 Share link:
 
 ```
-https://<user>.github.io/<repo>/#p=<base64url(pollSecret), no padding>&c=<pkC hex>[&r=<relay>,<relay>…]
+https://vote.risko.hu/#<base64url(pollSecret), no padding: 22 chars>[&r=<relay>,<relay>…]
 ```
 
 `r` is present only when the relay list differs from the defaults. Each relay is
 percent-encoded, and the list is comma-separated. The fragment is never sent to the web
-server. The creator pubkey `c` authenticates `meta` and `roster` events, and such events from
-any other key are ignored.
+server.
+
+The poll secret has two jobs:
+
+- **Secret.** It is the only secret in the link. Holding it is what lets you find the poll's
+  events, decrypt them and ask to join. 128 bits is ample here. Guessing *some* poll among
+  2^30 polls still costs 2^98, and Grover's algorithm gives about 2^64 quantum work, while a
+  quantum computer would break the secp256k1 vote math first anyway. Votes do not depend on
+  this secret at all, since they are protected by the AV-net itself.
+- **Creator commitment.** It commits to the creator's pubkey. A `meta` event authenticates its
+  author as the creator iff `H("poll"; event.pubkey, meta.salt)[0..16] = pollSecret`. Forging
+  another creator needs a 128-bit second preimage. If two different pubkeys both pass the
+  check (a 2^64 collision a creator could buy), the poll aborts. `meta` and `roster` events
+  from anyone other than the creator are ignored.
 
 ## 3. Transport
 
@@ -85,8 +98,9 @@ trimmed. `name` is at most 40 code points and `question` at most 300.
 
 ### meta (creator only)
 ```json
-{"v":1, "question":"Dinner together tonight?", "size":6, "deadline":1800086400, "created":1800000000}
+{"v":1, "question":"Dinner together tonight?", "size":6, "deadline":1800086400, "created":1800000000, "salt":"<64 hex>"}
 ```
+- `salt` is the creator salt from §2. The newest creator `meta` must still pass the check, or the poll aborts.
 - `size` is the expected group size, an integer from 2 to 50, or `null`.
 - `deadline` and `created` are unix seconds, with `created + 60 ≤ deadline ≤ created + 31 days`.
 
@@ -153,7 +167,9 @@ what prevents rogue-key and copy attacks.
 
 `state = derive(events, now)` is a pure function. In order:
 
-1. **meta**: the newest `meta` from `c`. If it is missing, the state is *loading*. If it is malformed, the poll **aborts**.
+1. **creator and meta**: the creator is the unique pubkey with a `meta` that opens the poll-secret commitment (§2).
+   If there is none, the state is *loading*. If there is more than one, the poll **aborts**. If the creator's newest
+   `meta` is malformed or does not open the commitment, the poll **aborts**.
 2. **joins**: a join is valid if it parses, `X` is a valid point, and `pokJoin` verifies. Invalid joins are ignored.
 3. **roster**: the newest `roster` from `c`. If it is missing, the phase is *joining*. If it is malformed, has the wrong size,
    is not strictly sorted, or lacks the creator, the poll **aborts**.

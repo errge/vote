@@ -5,8 +5,10 @@ import { generateSecretKey, getPublicKey, type Event } from 'nostr-tools/pure';
 import {
   bytesToHex,
   castBallot,
+  CREATOR_SALT_BYTES,
   hexToBytes,
   makeJoinKey,
+  pollSecretFor,
   pointToHex,
   proofToJson,
   randomBytes,
@@ -74,13 +76,21 @@ export async function createPoll(p: CreateParams, deps: Pick<SessionDeps, 'store
   if (p.size !== null && (!Number.isInteger(p.size) || p.size < 2 || p.size > MAX_GROUP)) {
     throw new Error('invalid group size');
   }
-  const pollSecret = randomBytes(32);
   const sk = generateSecretKey();
   const pubkey = getPublicKey(sk);
-  const link: PollLink = { pollSecret, creator: pubkey, relays: p.relays };
-  const keys = await derivePollKeys(pollSecret, pubkey);
+  const salt = randomBytes(CREATOR_SALT_BYTES);
+  const pollSecret = pollSecretFor(pubkey, salt);
+  const link: PollLink = { pollSecret, relays: p.relays };
+  const keys = await derivePollKeys(pollSecret);
   const created = Math.floor(deps.now() / 1000);
-  const meta: MetaMsg = { v: 1, question, size: p.size, deadline: created + p.durationSeconds, created };
+  const meta: MetaMsg = {
+    v: 1,
+    question,
+    size: p.size,
+    deadline: created + p.durationSeconds,
+    created,
+    salt: bytesToHex(salt),
+  };
   const metaEv = await sealEvent(keys, 'meta', meta, sk, meta.deadline, created);
   const { x, X, pok } = makeJoinKey(keys.pollTagBytes, pubkey);
   const joinEv = await sealEvent(
@@ -129,7 +139,7 @@ export class PollSession {
   }
 
   static async open(link: PollLink, deps: SessionDeps): Promise<PollSession> {
-    return new PollSession(link, await derivePollKeys(link.pollSecret, link.creator), deps);
+    return new PollSession(link, await derivePollKeys(link.pollSecret), deps);
   }
 
   get pollTag() {
@@ -141,8 +151,12 @@ export class PollSession {
     return ev ? ev.pubkey : this.local?.sk ? getPublicKey(hexToBytes(this.local.sk)) : null;
   }
 
+  get creator(): string | null {
+    return this.state.creator;
+  }
+
   get isCreator(): boolean {
-    return this.myPubkey === this.link.creator;
+    return !!this.myPubkey && this.myPubkey === this.state.creator;
   }
 
   get me(): Member | null {
@@ -235,7 +249,7 @@ export class PollSession {
   private derive(): PollState {
     return derivePoll(
       this.keys.pollTagBytes,
-      this.link.creator,
+      this.keys.pollSecret,
       this.events.values(),
       Math.floor(this.deps.now() / 1000),
     );
@@ -416,13 +430,13 @@ export class PollSession {
   /** Valid joiners that would be included when locking now. */
   lockCandidates() {
     const excluded = new Set(this.local?.excluded ?? []);
-    excluded.delete(this.link.creator);
+    if (this.creator) excluded.delete(this.creator);
     return this.state.joiners.filter((j) => !excluded.has(j.pubkey));
   }
 
   setExcluded(pubkey: string, exclude: boolean): void {
     const L = this.local;
-    if (!L || pubkey === this.link.creator) return;
+    if (!L || pubkey === this.creator) return;
     const set = new Set(L.excluded);
     if (exclude) set.add(pubkey);
     else set.delete(pubkey);
@@ -438,7 +452,7 @@ export class PollSession {
       if (!this.isCreator || !L?.sk || L.events.roster || this.state.roster || !this.state.meta) return;
       if (!this.beforeDeadline()) throw new Error('The deadline has passed.');
       const members = this.lockCandidates();
-      if (!members.some((m) => m.pubkey === this.link.creator)) throw new Error('Your own join is missing.');
+      if (!members.some((m) => m.pubkey === this.creator)) throw new Error('Your own join is missing.');
       if (members.length < 2) throw new Error('At least 2 participants are needed.');
       if (members.length > MAX_GROUP) throw new Error(`At most ${MAX_GROUP} participants are supported.`);
       const entries = sortRoster(members.map((m) => ({ pubkey: m.pubkey, joinHash: m.joinHash })));

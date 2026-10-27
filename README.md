@@ -75,8 +75,10 @@ subpath without server rewrites.
 ## How it works (short)
 
 1. **Create.** The creator's browser generates a random poll secret and a per-poll key. The
-   share link carries the secret in the URL fragment (`#p=…&c=…`), which never reaches the web
-   server. Relays only see AES-GCM ciphertext and a derived, opaque poll tag.
+   share link carries the secret in the URL fragment: 22 characters, e.g.
+   `https://vote.risko.hu/#Xq3vT0bK9mQ2wLr8YcN4aE`. The fragment never reaches the web server.
+   That one value also commits to the creator's key, so only the creator can set the question
+   and lock the group. Relays only see AES-GCM ciphertext and a derived, opaque poll tag.
 2. **Join.** Each participant's browser creates its own per-poll keys and publishes a name and
    an AV-net public key with a proof of knowledge.
 3. **Lock.** The creator locks the group, which fixes membership and order. This happens

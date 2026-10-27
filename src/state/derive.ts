@@ -5,6 +5,7 @@ import {
   computeYs,
   hexToBytes,
   isCanonicalRoster,
+  isCreatorBinding,
   isUnanimous,
   joinHash,
   pointFromHex,
@@ -64,6 +65,8 @@ export interface Abort {
 
 export interface PollState {
   phase: Phase;
+  /** the creator's pubkey, identified through the poll secret binding */
+  creator: string | null;
   meta: MetaMsg | null;
   /** valid JOINs, in join order */
   joiners: Joiner[];
@@ -105,9 +108,10 @@ export function shortKey(pubkey: string): string {
   return pubkey.slice(0, 6) + '…';
 }
 
-function emptyState(phase: Phase, meta: MetaMsg | null): PollState {
+function emptyState(phase: Phase, meta: MetaMsg | null, creator: string | null = null): PollState {
   return {
     phase,
+    creator,
     meta,
     joiners: [],
     roster: null,
@@ -120,25 +124,44 @@ function emptyState(phase: Phase, meta: MetaMsg | null): PollState {
   };
 }
 
+/** Pubkeys whose META carries a salt that binds them to the poll secret. */
+function findCreators(pollSecret: Uint8Array, events: PollEvent[]): string[] {
+  const found = new Set<string>();
+  for (const e of events) {
+    if (e.type !== 'meta' || found.has(e.pubkey)) continue;
+    const salt = typeof e.payload === 'object' && e.payload ? (e.payload as { salt?: unknown }).salt : undefined;
+    if (isCreatorBinding(pollSecret, e.pubkey, salt)) found.add(e.pubkey);
+  }
+  return [...found].sort();
+}
+
 export function derivePoll(
   pollTag: Uint8Array,
-  creator: string,
+  pollSecret: Uint8Array,
   events: Iterable<PollEvent>,
   now: number,
 ): PollState {
   const all = [...events];
+  // The creator is whoever can open the poll-secret commitment; META from anyone else is ignored.
+  const creators = findCreators(pollSecret, all);
+  if (creators.length === 0) return emptyState('loading', null);
+  if (creators.length > 1) {
+    const s = emptyState('aborted', null);
+    s.abort = { reason: 'More than one key claims to be the creator of this poll.' };
+    return s;
+  }
+  const creator = creators[0]!;
   const metaEv = latestByKey(all.filter((e) => e.type === 'meta' && e.pubkey === creator)).get(`meta:${creator}`);
   const meta = tryParse('meta', metaEv);
-  if (meta === undefined) return emptyState('loading', null);
-  if (meta === null) {
-    const s = emptyState('aborted', null);
+  if (!meta || !isCreatorBinding(pollSecret, creator, meta.salt)) {
+    const s = emptyState('aborted', null, creator);
     s.abort = { reason: 'The poll description published by the creator is invalid.' };
     return s;
   }
 
   // Events dated after the deadline do not count.
   const latest = latestByKey(all.filter((e) => e.created_at <= meta.deadline));
-  const st = emptyState('joining', meta);
+  const st = emptyState('joining', meta, creator);
   st.healIds.push(metaEv!.id);
   const fail = (reason: string, pubkey?: string, label?: string): PollState => {
     st.phase = 'aborted';

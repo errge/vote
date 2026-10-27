@@ -18,6 +18,8 @@ export interface MetaMsg {
   deadline: number;
   /** unix seconds */
   created: number;
+  /** 32-byte hex salt binding the creator's pubkey to the poll secret */
+  salt: string;
 }
 
 export interface JoinMsg {
@@ -104,11 +106,11 @@ export function cleanText(s: string): string {
 
 const parsers: { [K in EventType]: (v: unknown) => MessageMap[K] } = {
   meta(v) {
-    const o = obj(v, ['v', 'question', 'size', 'deadline', 'created']);
+    const o = obj(v, ['v', 'question', 'size', 'deadline', 'created', 'salt']);
     const created = int(o.created, 1_600_000_000, 2 ** 40);
     const deadline = int(o.deadline, created + 60, created + 31 * 86400);
     const size = o.size === null ? null : int(o.size, 2, MAX_GROUP);
-    return { v: 1, question: str(o.question, MAX_QUESTION), size, deadline, created };
+    return { v: 1, question: str(o.question, MAX_QUESTION), size, deadline, created, salt: hex(o.salt, 32) };
   },
   join(v) {
     const o = obj(v, ['v', 'name', 'X', 'pok']);

@@ -393,13 +393,13 @@ function CreatorPanel({ session }: { session: PollSession }) {
             <label class="check">
               <input
                 type="checkbox"
-                checked={!excluded.has(j.pubkey) || j.pubkey === session.link.creator}
-                disabled={j.pubkey === session.link.creator}
+                checked={!excluded.has(j.pubkey) || j.pubkey === session.creator}
+                disabled={j.pubkey === session.creator}
                 onChange={(e) => session.setExcluded(j.pubkey, !e.currentTarget.checked)}
               />
               <span>
                 {j.label}
-                {j.pubkey === session.link.creator && <span class="muted"> (you)</span>}
+                {j.pubkey === session.creator && <span class="muted"> (you)</span>}
               </span>
             </label>
           </li>

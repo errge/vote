@@ -30,17 +30,18 @@ A group of friends decides on a yes/no question ("Dinner together tonight?"). Th
 
 ### Poll setup (creator)
 1. Generate:
-   - `pollSecret`: 32 random bytes.
    - A per-poll Nostr keypair for the creator. The creator is also a participant and uses the same key.
+   - `salt`: 32 random bytes. It is stored inside the encrypted META.
+   - `pollSecret = H("unanimous/v1/poll" || creatorPubkey || salt)[0..16]`: 16 bytes (128 bits). It is both the poll's only secret and a commitment to the creator's pubkey.
 2. Derive:
    - `pollTag = hex(H("unanimous/v1/tag" || pollSecret))[0..32]`. This is public on relays and links the poll's events. It must not reveal the secret.
    - `encKey = HKDF-SHA256(pollSecret, info="unanimous/v1/enc")`, used as the AES-GCM-256 key.
-3. Share link: `https://<user>.github.io/<repo>/#p=<base64url(pollSecret)>&c=<creatorPubkeyHex>`, plus `&r=<relays>` only if non-default.
-   - `p` (poll secret): the 32 random bytes `pollSecret`, base64url without padding (43 chars). It is the poll's only secret. `pollTag` and `encKey` are derived from it, so whoever holds the link can find the poll's events on the relays, decrypt them, and join. It is the "invitation key" and must never leave the fragment.
-   - `c` (creator): the creator's per-poll Nostr public key, 64 hex chars (x-only). It is not secret. It tells clients which key may publish META and ROSTER, so only the creator can set the question and deadline and lock the group.
+3. Share link: `https://vote.risko.hu/#<base64url(pollSecret)>` (22 chars after `#`), plus `&r=<relays>` only if non-default.
+   - The poll secret is the "invitation key". `pollTag` and `encKey` are derived from it, so whoever holds the link can find the poll's events on the relays, decrypt them, and ask to join. It must never leave the fragment. 128 bits is ample. Votes don't depend on it at all, since the AV-net protects them.
+   - It also identifies the creator, with no separate creator parameter. A META authenticates its author as the creator iff `H("unanimous/v1/poll" || event.pubkey || meta.salt)[0..16] == pollSecret`. Forging that is a 128-bit second preimage. If more than one pubkey passes, abort.
+   - Only the creator may publish META (question, deadline) and ROSTER (the group lock). Ignore META/ROSTER events from any other key. Otherwise any link holder could change the question after people voted, or lock or kick people out of the group.
    - `r` (relays, optional): a comma-separated list of percent-encoded `wss://` URLs. It is present only when the creator chose non-default relays.
-   - The fragment never reaches GitHub.
-   - The creator pubkey in the link authenticates meta and roster events. Ignore meta/roster events from any other key.
+   - The fragment never reaches the web server.
 4. Publish a META event: question, optional expected group size N, deadline (default 24h, selectable), and creation time.
 
 ### Round 1 — JOIN

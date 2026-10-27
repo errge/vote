@@ -7,6 +7,9 @@ import {
   CryptoError,
   derivePollTag,
   G,
+  isCreatorBinding,
+  pollSecretFor,
+  POLL_SECRET_BYTES,
   hexToBytes,
   isUnanimous,
   joinHash,
@@ -32,7 +35,7 @@ import {
 } from '../src/crypto';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 
-const pollTagHex = derivePollTag(randomBytes(32));
+const pollTagHex = derivePollTag(randomBytes(16));
 const pollTag = hexToBytes(pollTagHex);
 
 function party() {
@@ -233,9 +236,24 @@ describe('encodings reject invalid input', () => {
 
 describe('poll key derivation', () => {
   it('pollTag is 32 hex chars and deterministic', () => {
-    const s = randomBytes(32);
+    const s = randomBytes(16);
     expect(derivePollTag(s)).toMatch(/^[0-9a-f]{32}$/);
     expect(derivePollTag(s)).toBe(derivePollTag(s));
-    expect(derivePollTag(randomBytes(32))).not.toBe(derivePollTag(s));
+    expect(derivePollTag(randomBytes(16))).not.toBe(derivePollTag(s));
+    expect(() => derivePollTag(randomBytes(32))).toThrow(CryptoError);
+  });
+
+  it('the poll secret binds the creator pubkey', () => {
+    const pk = getPublicKey(generateSecretKey());
+    const salt = randomBytes(32);
+    const secret = pollSecretFor(pk, salt);
+    expect(secret).toHaveLength(POLL_SECRET_BYTES);
+    expect(pollSecretFor(pk, salt)).toEqual(secret);
+    const saltHex = Array.from(salt, (b) => b.toString(16).padStart(2, '0')).join('');
+    expect(isCreatorBinding(secret, pk, saltHex)).toBe(true);
+    expect(isCreatorBinding(secret, getPublicKey(generateSecretKey()), saltHex)).toBe(false);
+    expect(isCreatorBinding(secret, pk, '00'.repeat(32))).toBe(false);
+    expect(isCreatorBinding(secret, pk, 'zz')).toBe(false);
+    expect(isCreatorBinding(secret, pk, undefined)).toBe(false);
   });
 });

@@ -20,17 +20,17 @@ export interface PollKeys {
   pollTag: string;
   pollTagBytes: Uint8Array;
   encKey: CryptoKey;
-  /** creator pubkey from the share link; authenticates meta and roster */
-  creator: string;
+  /** the 16-byte secret from the share link; also identifies the creator (see pollSecretFor) */
+  pollSecret: Uint8Array;
 }
 
-export async function derivePollKeys(pollSecret: Uint8Array, creator: string): Promise<PollKeys> {
+export async function derivePollKeys(pollSecret: Uint8Array): Promise<PollKeys> {
   const pollTag = derivePollTag(pollSecret);
   return {
     pollTag,
     pollTagBytes: hexToBytes(pollTag),
     encKey: await importEncKey(deriveEncKeyBytes(pollSecret)),
-    creator,
+    pollSecret,
   };
 }
 

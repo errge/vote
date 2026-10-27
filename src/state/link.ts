@@ -1,18 +1,24 @@
-// Share links: #p=<base64url(pollSecret)>&c=<creatorPubkeyHex>[&r=<relays>]
-import { base64urlToBytes, bytesToBase64url, isHex, POLL_SECRET_BYTES } from '../crypto';
+// Share links: #<base64url(pollSecret)>[&r=<relay>,<relay>…]
+// The 16-byte poll secret is the only thing needed: it encrypts and locates the
+// poll and also identifies the creator (see pollSecretFor).
+import { base64urlToBytes, bytesToBase64url, POLL_SECRET_BYTES } from '../crypto';
 import { DEFAULT_RELAYS, isDefaultRelaySet, normalizeRelay } from '../nostr/relays';
 
 export interface PollLink {
   pollSecret: Uint8Array;
-  creator: string;
   relays: string[];
 }
 
+const SECRET_RE = /^[A-Za-z0-9_-]{22}$/;
+
+/** True if the fragment looks like a poll link (for routing). */
+export function isPollFragment(fragment: string): boolean {
+  return SECRET_RE.test(fragment.replace(/^#/, '').split('&')[0]!);
+}
+
 export function parsePollFragment(fragment: string): PollLink | null {
-  const params = new URLSearchParams(fragment.replace(/^#/, ''));
-  const p = params.get('p');
-  const c = params.get('c');
-  if (!p || !c || !isHex(c, 32)) return null;
+  const [p, ...rest] = fragment.replace(/^#/, '').split('&');
+  if (!p || !SECRET_RE.test(p)) return null;
   let pollSecret: Uint8Array;
   try {
     pollSecret = base64urlToBytes(p);
@@ -21,7 +27,7 @@ export function parsePollFragment(fragment: string): PollLink | null {
   }
   if (pollSecret.length !== POLL_SECRET_BYTES) return null;
   let relays = [...DEFAULT_RELAYS];
-  const r = params.get('r');
+  const r = new URLSearchParams(rest.join('&')).get('r');
   if (r) {
     const parsed = r
       .split(',')
@@ -29,11 +35,11 @@ export function parsePollFragment(fragment: string): PollLink | null {
       .filter((x): x is string => !!x);
     if (parsed.length) relays = [...new Set(parsed)];
   }
-  return { pollSecret, creator: c, relays };
+  return { pollSecret, relays };
 }
 
 export function pollFragment(link: PollLink): string {
-  let f = `#p=${bytesToBase64url(link.pollSecret)}&c=${link.creator}`;
+  let f = `#${bytesToBase64url(link.pollSecret)}`;
   if (!isDefaultRelaySet(link.relays)) f += `&r=${link.relays.map(encodeURIComponent).join(',')}`;
   return f;
 }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'preact/hooks';
+import { isPollFragment } from '../state/link';
 import { Home } from './Home';
 import { How } from './How';
 import { PollPage } from './PollPage';
 
 function currentRoute(): { name: 'home' } | { name: 'how' } | { name: 'poll'; fragment: string } {
   const h = location.hash;
-  if (h.startsWith('#p=')) return { name: 'poll', fragment: h };
+  if (isPollFragment(h)) return { name: 'poll', fragment: h };
   if (h === '#/how') return { name: 'how' };
   return { name: 'home' };
 }

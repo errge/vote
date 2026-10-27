@@ -6,8 +6,8 @@ import {
   commitmentHash,
   G,
   joinHash,
-
   N,
+  pollSecretFor,
   pointToHex,
   prove,
   proofToJson,
@@ -39,12 +39,13 @@ interface P {
 class Builder {
   keys!: PollKeys;
   creator!: P;
+  salt = randomBytes(32);
   t = T0;
 
   static async make(): Promise<Builder> {
     const b = new Builder();
     const sk = generateSecretKey();
-    b.keys = await derivePollKeys(randomBytes(32), getPublicKey(sk));
+    b.keys = await derivePollKeys(pollSecretFor(getPublicKey(sk), b.salt));
     b.creator = b.party('Creator', sk);
     return b;
   }
@@ -63,7 +64,15 @@ class Builder {
   }
 
   meta(p = this.creator, over: object = {}) {
-    return this.ev('meta', p, { v: 1, question: 'Q?', size: null, deadline: DEADLINE, created: T0, ...over });
+    return this.ev('meta', p, {
+      v: 1,
+      question: 'Q?',
+      size: null,
+      deadline: DEADLINE,
+      created: T0,
+      salt: bytesToHex(this.salt),
+      ...over,
+    });
   }
 
   join(p: P, over: object = {}) {
@@ -92,7 +101,7 @@ async function honest(votes: Vote[]) {
   for (const p of ps) events.push(await b.join(p));
   const rosterEv = await b.roster(ps);
   events.push(rosterEv);
-  const pre = derivePoll(b.keys.pollTagBytes, b.creator.pubkey, events, T0 + 100);
+  const pre = derivePoll(b.keys.pollTagBytes, b.keys.pollSecret, events, T0 + 100);
   expect(pre.phase).toBe('committing');
   const members = pre.roster!.members;
   const byPk = new Map(ps.map((p, i) => [p.pubkey, { p, vote: votes[i]! }]));
@@ -118,7 +127,7 @@ function revealPayload(bal: Ballot, transcript: string, over: object = {}) {
 }
 
 const derive = (b: Builder, evs: PollEvent[], now = T0 + 1000) =>
-  derivePoll(b.keys.pollTagBytes, b.creator.pubkey, evs, now);
+  derivePoll(b.keys.pollTagBytes, b.keys.pollSecret, evs, now);
 
 function shuffle<T>(a: T[]): T[] {
   const r = [...a];
@@ -135,6 +144,28 @@ describe('state derivation: phases', () => {
     expect(derive(b, []).phase).toBe('loading');
     const other = b.party('X');
     expect(derive(b, [await b.meta(other)]).phase).toBe('loading');
+  });
+
+  it('the creator is identified through the poll secret; impostors are ignored', async () => {
+    const b = await Builder.make();
+    const impostor = b.party('Mallory');
+    // An impostor cannot reuse the creator's salt, nor bring their own.
+    const fake1 = await b.meta(impostor, { question: 'Fake?' });
+    const fake2 = await b.meta(impostor, { question: 'Fake?', salt: bytesToHex(randomBytes(32)) });
+    expect(derive(b, [fake1, fake2]).phase).toBe('loading');
+    const st = derive(b, [fake1, await b.meta(), fake2]);
+    expect(st.creator).toBe(b.creator.pubkey);
+    expect(st.meta!.question).toBe('Q?');
+    // nor publish a roster
+    const p = b.party('P');
+    const r = await b.roster([b.creator, p], impostor);
+    expect(derive(b, [await b.meta(), await b.join(b.creator), await b.join(p), r]).phase).toBe('joining');
+  });
+
+  it('a newer creator META without a binding salt aborts', async () => {
+    const b = await Builder.make();
+    const st = derive(b, [await b.meta(), await b.meta(b.creator, { salt: bytesToHex(randomBytes(32)) })]);
+    expect(st.phase).toBe('aborted');
   });
 
   it('invalid META aborts', async () => {
@@ -451,7 +482,7 @@ describe('codec', () => {
     const { finalizeEvent } = await import('nostr-tools/pure');
     const resigned = finalizeEvent({ kind: moved.kind, created_at: moved.created_at, tags: moved.tags, content: raw.content }, b.creator.sk);
     expect(await openEvent(b.keys, resigned)).toBeNull();
-    const other = await derivePollKeys(randomBytes(32), b.creator.pubkey);
+    const other = await derivePollKeys(randomBytes(16));
     expect(await openEvent(other, raw)).toBeNull();
   });
 
